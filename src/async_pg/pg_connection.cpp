@@ -1,9 +1,10 @@
 #include "pg_connection.hpp"
 
 
-pg_connection::pg_connection() :
+pg_connection::pg_connection(int id) :
 	_conn(nullptr),
-	_async_state(async_state_t::connection_failed)
+	_async_state(async_state_t::connection_failed),
+	_id(id)
 {}
 
 pg_connection::~pg_connection() {
@@ -83,6 +84,11 @@ PostgresPollingStatusType pg_connection::connectPoll() {
 			_last_error = PQerrorMessage(_conn);
 		}
 	}
+	else if (s == PostgresPollingStatusType::PGRES_POLLING_FAILED) {
+		if (_async_state == async_state_t::idle || _async_state == async_state_t::executing_query) {
+			_async_state = async_state_t::connection_abort;
+		}
+	}
 	return s;
 }
 
@@ -98,6 +104,11 @@ PostgresPollingStatusType pg_connection::resetPoll() {
 			_last_error = PQerrorMessage(_conn);
 		}
 	}
+	else if (s == PostgresPollingStatusType::PGRES_POLLING_FAILED) {
+		if (_async_state == async_state_t::idle || _async_state == async_state_t::executing_query) {
+			_async_state = async_state_t::connection_abort;
+		}
+	}
 	return s;
 }
 
@@ -105,6 +116,11 @@ PostgresPollingStatusType pg_connection::resetPoll() {
 bool pg_connection::start_send_query(const std::string& sql, const std::list<pg_param>& params) {
 
 	if (_async_state != async_state_t::idle) {
+		return false;
+	}
+
+	// this will change async_state if something wrong
+	if (connectPoll() != PostgresPollingStatusType::PGRES_POLLING_OK) {
 		return false;
 	}
 
@@ -153,6 +169,11 @@ bool pg_connection::start_send_prepared_query(const std::string& name, const std
 		return false;
 	}
 
+	// this will change async_state if something wrong
+	if (connectPoll() != PostgresPollingStatusType::PGRES_POLLING_OK) {
+		return false;
+	}
+
 	int n_params = (int) params.size();
 	char** values = new char* [n_params];
 	int* lengths = new int[n_params];
@@ -187,6 +208,11 @@ bool pg_connection::start_send_prepared_query(const std::string& name, const std
 bool pg_connection::start_send_prepared_statement(const std::string& name, const std::string& sql) {
 
 	if (_async_state != async_state_t::idle) {
+		return false;
+	}
+
+	// this will change async_state if something wrong
+	if (connectPoll() != PostgresPollingStatusType::PGRES_POLLING_OK) {
 		return false;
 	}
 
@@ -275,6 +301,7 @@ bool pg_connection::read() {
 	//	Note that the result does not say whether any input data was actually collected.
 	if (PQconsumeInput(_conn) == 0) {
 		_last_error = PQerrorMessage(_conn);
+		connectPoll();  // check status and change async_state if needed
 		return false;
 	}
 
@@ -305,6 +332,7 @@ bool pg_connection::write() {
 	int r = PQflush(_conn);
 	if (r == -1) {
 		_last_error = PQerrorMessage(_conn);
+		connectPoll(); // check status and change async_state if needed
 		return false;
 	}
 	_need_flush = r == 1;

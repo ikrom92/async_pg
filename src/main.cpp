@@ -431,7 +431,7 @@ int test3() {
 
 int main() {
 	async_pg pg("10.0.2.2", "5432", "workly", "postgres", "123", "disable");
-	pg.start(1);
+	pg.start(10);
 
 	while (running) {
 

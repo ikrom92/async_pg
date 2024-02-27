@@ -119,7 +119,7 @@ void async_pg::process(int n_connections) {
 	
 	std::vector<std::shared_ptr<pg_connection>> connections;
 	for (int i = 0; i < n_connections; ++i) {
-		auto conn = std::make_shared<pg_connection>();
+		auto conn = std::make_shared<pg_connection>(i + 1);
 		if (conn->start_connect(_connection_params)) {
 			connections.push_back(conn);
 		}
@@ -142,7 +142,7 @@ void async_pg::process(int n_connections) {
 
 			// conn->connectPoll() might change async_state of connection
 			if (conn->async_state() == pg_connection::async_state_t::connecting) {
-				printf("async_state_t::connecting\n");
+				printf("[%02d] async_state_t::connecting\n", conn->id());
 				PostgresPollingStatusType s = conn->connectPoll();
 				if (s == PostgresPollingStatusType::PGRES_POLLING_READING) {
 					event.events |= EPOLLIN;
@@ -154,7 +154,7 @@ void async_pg::process(int n_connections) {
 
 			// conn->resetPoll() might change async_state of connection
 			if (conn->async_state() == pg_connection::async_state_t::resetting) {
-				printf("async_state_t::resetting\n");
+				printf("[%02d] async_state_t::resetting\n", conn->id());
 				PostgresPollingStatusType s = conn->resetPoll();
 				if (s == PostgresPollingStatusType::PGRES_POLLING_READING) {
 					event.events |= EPOLLIN;
@@ -165,21 +165,21 @@ void async_pg::process(int n_connections) {
 			}
 
 			if (conn->async_state() == pg_connection::async_state_t::connection_failed) {
-				printf("async_state_t::connection_failed: %s\n", conn->last_error().c_str());
+				printf("[%02d] async_state_t::connection_failed: %s\n", conn->id(), conn->last_error().c_str());
 				if (!conn->start_connect(_connection_params)) {
-					printf("[error] start_connect -> %s\n", conn->last_error().c_str());
+					printf("\t[%02d] start_connect -> %s\n", conn->id(), conn->last_error().c_str());
 				}
 			}
 
 			if (conn->async_state() == pg_connection::async_state_t::connection_abort) {
-				printf("async_state_t::connection_abort: %s\n", conn->last_error().c_str());
+				printf("[%02d] async_state_t::connection_abort: %s\n", conn->id(), conn->last_error().c_str());
 				if (!conn->start_reset()) {
-					printf("[error] start_reset -> %s\n", conn->last_error().c_str());
+					printf("\t[%02d] start_reset -> %s\n", conn->id(), conn->last_error().c_str());
 				}
 			}
 
 			if (conn->async_state() == pg_connection::async_state_t::executing_query) {
-				printf("async_state_t::executing_query\n");
+				printf("[%02d] async_state_t::executing_query\n", conn->id());
 				if (conn->poll_read()) {
 					event.events |= EPOLLIN;
 				}
@@ -191,9 +191,9 @@ void async_pg::process(int n_connections) {
 			}
 
 			if (conn->async_state() == pg_connection::async_state_t::idle) {
-				printf("async_state_t::idle\n");
+				printf("[%02d] async_state_t::idle\n", conn->id());
 				if (!conn->start_send_query("SELECT * FROM w_device")) {
-					printf("start_send_query -> %s\n", conn->last_error().c_str());
+					printf("[%02d] start_send_query -> %s\n", conn->id(), conn->last_error().c_str());
 				}
 
 				if (conn->poll_read()) {
@@ -237,7 +237,8 @@ void async_pg::process(int n_connections) {
 					std::list<pg_result> results;
 					if (conn->get_results(results)) {
 						for (auto& r : results) {
-							printf("---------------\n%s\n\n", r.dump().c_str());
+							printf("[%02d] got result\n", conn->id());
+							// printf("---------------\n%s\n\n", r.dump().c_str());
 						}
 					}
 				}
@@ -255,6 +256,7 @@ void async_pg::process(int n_connections) {
 			
 		}
 
+		std::this_thread::sleep_for(std::chrono::milliseconds(100));
 	}
 
 

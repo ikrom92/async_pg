@@ -20,7 +20,7 @@ public:
 	pg_connection(pg_connection&&) = delete;
 	pg_connection& operator=(pg_connection&&) = delete;
 
-	pg_connection();
+	pg_connection(int id);
 	~pg_connection();
 
 	bool start_connect(const std::map<std::string, std::string>& params);
@@ -54,8 +54,10 @@ public:
 
 	const async_state_t& async_state() { return _async_state; }
 	const std::string& last_error() const { return _last_error; }
+	const int& id() const { return _id; }
 
 private:
+	int _id;
 	PGconn* _conn;
 	std::string _last_error;
 	bool _need_flush;
