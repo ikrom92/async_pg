@@ -191,9 +191,18 @@ void async_pg::process(int n_connections) {
 			}
 
 			if (conn->async_state() == pg_connection::async_state_t::idle) {
-				// send command
 				printf("async_state_t::idle\n");
-				conn->start_send(pg_query("SELECT * FROM w_device"));
+				if (!conn->start_send_query("SELECT * FROM w_device")) {
+					printf("start_send_query -> %s\n", conn->last_error().c_str());
+				}
+
+				if (conn->poll_read()) {
+					event.events |= EPOLLIN;
+				}
+
+				if (conn->poll_write()) {
+					event.events |= EPOLLOUT;
+				}
 			}
 
 			if (event.events & EPOLLIN || event.events & EPOLLOUT) {
@@ -224,6 +233,13 @@ void async_pg::process(int n_connections) {
 					if (event.events & EPOLLOUT) {
 						conn->write();
 					}
+
+					std::list<pg_result> results;
+					if (conn->get_results(results)) {
+						for (auto& r : results) {
+							printf("---------------\n%s\n\n", r.dump().c_str());
+						}
+					}
 				}
 				
 				if (event.events & EPOLLERR) {
@@ -238,8 +254,6 @@ void async_pg::process(int n_connections) {
 			}
 			
 		}
-
-		
 
 	}
 

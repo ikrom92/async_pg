@@ -26,9 +26,9 @@ public:
 	bool start_connect(const std::map<std::string, std::string>& params);
 	bool start_reset();
 	
-	bool start_send_query(const std::string& sql, const std::list<pg_param>& params);
-	bool start_send_prepared_query(const std::string& name, const std::list<pg_param>& params);
-	bool start_send_prepared_statement(const std::string& name, const std::string& sql, const std::list<pg_param>& params);
+	bool start_send_query(const std::string& sql, const std::list<pg_param>& params = {});
+	bool start_send_prepared_query(const std::string& name, const std::list<pg_param>& params = {});
+	bool start_send_prepared_statement(const std::string& name, const std::string& sql);
 	bool has_prepared_statement(const std::string& name);
 
 	bool get_results(std::list<pg_result>& results);

@@ -184,7 +184,7 @@ bool pg_connection::start_send_prepared_query(const std::string& name, const std
 	return true;
 }
 
-bool pg_connection::start_send_prepared_statement(const std::string& name, const std::string& sql, const std::list<pg_param>& params) {
+bool pg_connection::start_send_prepared_statement(const std::string& name, const std::string& sql) {
 
 	if (_async_state != async_state_t::idle) {
 		return false;
