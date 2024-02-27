@@ -71,23 +71,12 @@ bool pg_connection::start_reset() {
 	return true;
 }
 
-bool pg_connection::start_send(pg_query&& query) {
-
-
-
-	// _status = status_t::query_started;
-	_has_query = true;
-	_need_flush = true;
-	_async_state = async_state_t::executing_query;
-	return true;
-}
-
-
 PostgresPollingStatusType pg_connection::connectPoll() {
 	PostgresPollingStatusType s = PQconnectPoll(_conn);
 	if (_async_state == async_state_t::connecting) {
 		if (s == PostgresPollingStatusType::PGRES_POLLING_OK) {
 			_async_state = async_state_t::idle;
+			_prepared_statements.clear();
 		}
 		else if (s == PostgresPollingStatusType::PGRES_POLLING_FAILED) {
 			_async_state = async_state_t::connection_failed;
@@ -102,6 +91,7 @@ PostgresPollingStatusType pg_connection::resetPoll() {
 	if (_async_state == async_state_t::resetting) {
 		if (s == PostgresPollingStatusType::PGRES_POLLING_OK) {
 			_async_state = async_state_t::idle;
+			_prepared_statements.clear();
 		}
 		else if (s == PostgresPollingStatusType::PGRES_POLLING_FAILED) {
 			_async_state = async_state_t::connection_abort;
@@ -111,9 +101,118 @@ PostgresPollingStatusType pg_connection::resetPoll() {
 	return s;
 }
 
+
+bool pg_connection::start_send_query(const std::string& sql, const std::list<pg_param>& params) {
+
+	if (_async_state != async_state_t::idle) {
+		return false;
+	}
+
+	if (params.empty()) {
+		if (PQsendQuery(_conn, sql.c_str()) == 0) {
+			_last_error = PQerrorMessage(_conn);
+			return false;
+		}
+	}
+	else {
+		int n_params = (int) params.size();
+		char** values = new char* [n_params];
+		int* lengths = new int[n_params];
+		int* formats = new int[n_params];
+		int i = 0;
+		for (auto& p : params) {
+			values[i] = (char*)p.data();
+			lengths[i] = (int)p.size();
+			formats[i] = (int)p.is_binary();
+			++i;
+		}
+
+		int r = PQsendQueryParams(_conn, sql.c_str(), n_params, nullptr, values, lengths, formats, 0);
+		delete[] values;
+		delete[] lengths;
+		delete[] formats;
+		if (r == 0) {
+			_last_error = PQerrorMessage(_conn);
+			return false;
+		}
+	}
+
+	//	After sending any command or data on a nonblocking connection, call PQflush. 
+	// 	Returns 1 if it was unable to send all the data in the send queue yet 
+	if (PQflush(_conn) == 1) {
+		_need_flush = true;
+	}
+
+	_async_state = async_state_t::executing_query;
+	return true;
+}
+
+bool pg_connection::start_send_prepared_query(const std::string& name, const std::list<pg_param>& params) {
+
+	if (_async_state != async_state_t::idle) {
+		return false;
+	}
+
+	int n_params = (int) params.size();
+	char** values = new char* [n_params];
+	int* lengths = new int[n_params];
+	int* formats = new int[n_params];
+	int i = 0;
+	for (auto& p : params) {
+		values[i] = (char*)p.data();
+		lengths[i] = (int)p.size();
+		formats[i] = (int)p.is_binary();
+		++i;
+	}
+
+	int r = PQsendQueryPrepared(_conn, name.c_str(), n_params, values, lengths, formats, 0);
+	delete[] values;
+	delete[] lengths;
+	delete[] formats;
+	if (r == 0) {
+		_last_error = PQerrorMessage(_conn);
+		return false;
+	}
+
+	//	After sending any command or data on a nonblocking connection, call PQflush. 
+	// 	Returns 1 if it was unable to send all the data in the send queue yet 
+	if (PQflush(_conn) == 1) {
+		_need_flush = true;
+	}
+
+	_async_state = async_state_t::executing_query;
+	return true;
+}
+
+bool pg_connection::start_send_prepared_statement(const std::string& name, const std::string& sql, const std::list<pg_param>& params) {
+
+	if (_async_state != async_state_t::idle) {
+		return false;
+	}
+
+	if (PQsendPrepare(_conn, name.c_str(), sql.c_str(), 0, nullptr) == 0) {
+		_last_error = PQerrorMessage(_conn);
+		return false;
+	}
+
+
+	//	After sending any command or data on a nonblocking connection, call PQflush. 
+	// 	Returns 1 if it was unable to send all the data in the send queue yet 
+	if (PQflush(_conn) == 1) {
+		_need_flush = true;
+	}
+
+	_async_state = async_state_t::executing_query;
+	return true;
+}
+
+bool pg_connection::has_prepared_statement(const std::string& name) {
+	return _prepared_statements.count(name) > 0;
+}
+
 bool pg_connection::poll_read() {
 	// If PQflush() returns 1, wait for the socket to become read- or write-ready. 
-	return PQisBusy(_conn) == 1 || _need_flush;
+	return PQisBusy(_conn) == 1;
 }
 
 bool pg_connection::poll_write() {
@@ -124,12 +223,46 @@ int pg_connection::socket() {
 	return PQsocket(_conn);
 }
 
+bool pg_connection::get_results(std::list<pg_result>& results) {
+
+	if (_async_state != async_state_t::executing_query) {
+		return false;
+	}
+
+	//	Returns 1 if a command is busy, that is, PQgetResult would block waiting for input. 
+	//	A 0 return indicates that PQgetResult can be called with assurance of not blocking.
+	if (PQisBusy(_conn) == 1) {
+		return false;
+	}
+
+	while (PGresult* res = PQgetResult(_conn)) {
+		results.push_back(pg_result(res));
+	}
+
+	_need_flush = false;
+	_async_state = async_state_t::idle;
+	return true;
+}
+
+bool pg_connection::get_notifies() {
+
+	//	Returns 1 if a command is busy, that is, PQgetResult would block waiting for input. 
+	//	A 0 return indicates that PQgetResult can be called with assurance of not blocking.
+	if (PQisBusy(_conn) == 1) {
+		return false;
+	}
+
+	while (PGnotify* notify = PQnotifies(_conn)) {
+		// @todo
+	}
+	return true;
+}
 
 bool pg_connection::read() {
 
 	//	Note! Don't call PQconsumeInput if PQconnectPoll or PQresetPoll 
 	//	returns PGRES_POLLING_READING or PGRES_POLLING_WRITING. 
-	if (PQconnectPoll(_conn) != PostgresPollingStatusType::PGRES_POLLING_OK) {
+	if (connectPoll() != PostgresPollingStatusType::PGRES_POLLING_OK) {
 		return true;
 	}
 
@@ -145,39 +278,12 @@ bool pg_connection::read() {
 		return false;
 	}
 
-	//	Returns 1 if a command is busy, that is, PQgetResult would block waiting for input. 
-	//	A 0 return indicates that PQgetResult can be called with assurance of not blocking.
-	if (PQisBusy(_conn) == 1) {
-		return true;
-	}
-
-	if (_has_query) {
-
-		//	PQgetResult must be called repeatedly until it returns a null pointer, 
-		//	indicating that the command is done. 
-		//	If called when no command is active, PQgetResult will just return a null pointer at once.
-
-		std::list<pg_result> results;
-		while (PGresult* res = PQgetResult(_conn)) {
-			results.push_back(pg_result(res));
-		}
-		_query.set_result(std::move(results));
-		_has_query = false;
-		_need_flush = false;
-		_async_state = async_state_t::idle;
-	}
-	else {
-		while (PGnotify* notify = PQnotifies(_conn)) {
-			// @todo
-		}
-	}
-
 	return true;
 }
 
 bool pg_connection::write() {
 
-	if (PQconnectPoll(_conn) != PostgresPollingStatusType::PGRES_POLLING_OK) {
+	if (connectPoll() != PostgresPollingStatusType::PGRES_POLLING_OK) {
 		return true;
 	}
 

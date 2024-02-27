@@ -61,6 +61,7 @@
 		"set": "cpp",
 		"csignal": "cpp",
 		"iomanip": "cpp",
-		"sstream": "cpp"
+		"sstream": "cpp",
+		"unordered_set": "cpp"
 	}
 }

@@ -7,6 +7,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <list>
+#include <unordered_set>
 
 #include "pg_result.hpp"
 #include "pg_query.hpp"
@@ -24,8 +25,15 @@ public:
 
 	bool start_connect(const std::map<std::string, std::string>& params);
 	bool start_reset();
-	bool start_send(pg_query&& query);
 	
+	bool start_send_query(const std::string& sql, const std::list<pg_param>& params);
+	bool start_send_prepared_query(const std::string& name, const std::list<pg_param>& params);
+	bool start_send_prepared_statement(const std::string& name, const std::string& sql, const std::list<pg_param>& params);
+	bool has_prepared_statement(const std::string& name);
+
+	bool get_results(std::list<pg_result>& results);
+	bool get_notifies();
+
 	int socket();
 	bool read();
 	bool write();
@@ -40,19 +48,17 @@ public:
 		resetting,
 		connection_failed,
 		connection_abort,
-		idle,
 		executing_query,
+		idle,
 	};
 
 	const async_state_t& async_state() { return _async_state; }
 	const std::string& last_error() const { return _last_error; }
 
 private:
-	std::map<std::string, std::string> _connection_params;
-	pg_query _query;
 	PGconn* _conn;
 	std::string _last_error;
-	bool _has_query;
 	bool _need_flush;
 	async_state_t _async_state;
+	std::unordered_set<std::string> _prepared_statements;
 };
