@@ -4,7 +4,8 @@
 pg_connection::pg_connection(int id) :
 	_conn(nullptr),
 	_async_state(async_state_t::connection_failed),
-	_id(id)
+	_id(id),
+	_need_flush(false)
 {}
 
 pg_connection::~pg_connection() {

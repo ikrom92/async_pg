@@ -38,9 +38,14 @@ public:
 
 private:
 	void process(int n_connections);
+	void cond_notify();
+	void cond_reset();
+
 	bool _running;
 	std::thread _thr;
 	std::mutex _mtx;
 	std::list<pg_query> _queries;
 	std::map<std::string, std::string> _connection_params;
+	int _notifiy_fd;
+	int _wait_fd;
 };

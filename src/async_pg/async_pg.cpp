@@ -1,10 +1,12 @@
 #include "async_pg.hpp"
 #include <sys/epoll.h>
+#include <sys/ioctl.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <memory>
 #include <errno.h>
 #include <unordered_map>
+#include <string.h>
 #include "pg_connection.hpp"
 
 // Rules:
@@ -44,11 +46,29 @@ async_pg::async_pg(std::string ip, std::string port, std::string dbname, std::st
 async_pg::async_pg(std::map<std::string, std::string> params) {
 	_connection_params = params;
 	_running = false;
+	_notifiy_fd = -1;
+	_wait_fd = -1;
+
+	int pipes[2];
+	if (pipe(pipes) == -1) {
+		std::string error = strerror(errno);
+		throw std::runtime_error("pipe() failed: " + error);
+	}
+	_wait_fd = pipes[0];
+	_notifiy_fd = pipes[1];
 }
 
 async_pg::~async_pg() {
 	if (_running) {
 		stop();
+	}
+
+	if (_wait_fd != -1) {
+		close(_wait_fd);
+	}
+
+	if (_notifiy_fd != -1) {
+		close(_notifiy_fd);
 	}
 }
 
@@ -67,6 +87,7 @@ void async_pg::stop() {
 	std::unique_lock<std::mutex> lock(_mtx);
 	if (_running) {
 		_running = false;
+		cond_notify();
 		lock.unlock();
 		if (_thr.joinable()) {
 			_thr.join();
@@ -82,6 +103,7 @@ std::future<std::list<pg_result>> async_pg::execute(std::string&& sql, std::list
 
 	std::lock_guard<std::mutex> lock(_mtx);
 	_queries.push_back(std::move(query));
+	cond_notify();
 	return future;
 }
 
@@ -92,6 +114,7 @@ std::future<std::list<pg_result>> async_pg::execute(const std::string& sql, cons
 
 	std::lock_guard<std::mutex> lock(_mtx);
 	_queries.push_back(std::move(query));
+	cond_notify();
 	return future;
 }
 
@@ -102,6 +125,7 @@ std::future<std::list<pg_result>> async_pg::execute_prepared(std::string&& name,
 
 	std::lock_guard<std::mutex> lock(_mtx);
 	_queries.push_back(std::move(query));
+	cond_notify();
 	return future;
 }
 
@@ -112,6 +136,7 @@ std::future<std::list<pg_result>> async_pg::execute_prepared(const std::string& 
 
 	std::lock_guard<std::mutex> lock(_mtx);
 	_queries.push_back(std::move(query));
+	cond_notify();
 	return future;
 }
 
@@ -130,8 +155,20 @@ void async_pg::process(int n_connections) {
 	}
 	
 	int efd = epoll_create1(0);
+
+	{
+		epoll_event e;
+		e.events = EPOLLIN;
+		e.data.fd = _wait_fd;
+		if (epoll_ctl(efd, EPOLL_CTL_ADD, _wait_fd, &e) == -1) {
+			printf("failed to add _wait_fd to epoll\n");
+			return;
+		}
+	}
+		
 	epoll_event* events = new epoll_event[n_connections];
 	std::unordered_map<int, std::shared_ptr<pg_connection>> scheduled_connections;
+
 
 	while (true) {
 
@@ -180,6 +217,7 @@ void async_pg::process(int n_connections) {
 
 			if (conn->async_state() == pg_connection::async_state_t::executing_query) {
 				printf("[%02d] async_state_t::executing_query\n", conn->id());
+				
 				if (conn->poll_read()) {
 					event.events |= EPOLLIN;
 				}
@@ -191,10 +229,10 @@ void async_pg::process(int n_connections) {
 			}
 
 			if (conn->async_state() == pg_connection::async_state_t::idle) {
-				printf("[%02d] async_state_t::idle\n", conn->id());
-				if (!conn->start_send_query("SELECT * FROM w_device")) {
-					printf("[%02d] start_send_query -> %s\n", conn->id(), conn->last_error().c_str());
-				}
+				// printf("[%02d] async_state_t::idle\n", conn->id());
+				// if (!conn->start_send_query("SELECT * FROM w_device")) {
+				// 	printf("[%02d] start_send_query -> %s\n", conn->id(), conn->last_error().c_str());
+				// }
 
 				if (conn->poll_read()) {
 					event.events |= EPOLLIN;
@@ -226,6 +264,7 @@ void async_pg::process(int n_connections) {
 			epoll_event event = events[i];
 			if (scheduled_connections.count(event.data.fd)) {
 				auto conn = scheduled_connections.at(event.data.fd);
+				printf("conn %d, events %02X\n", conn->id(), event.events);
 				if (conn->async_state() == pg_connection::async_state_t::executing_query) {
 					if (event.events & EPOLLIN) {
 						conn->read();
@@ -253,10 +292,12 @@ void async_pg::process(int n_connections) {
 				}
 				scheduled_connections.erase(event.data.fd);
 			}
-			
-		}
+			else if (event.data.fd == _wait_fd) {
+				printf("wake up\n");
+				cond_reset();
+			}
 
-		std::this_thread::sleep_for(std::chrono::milliseconds(100));
+		}
 	}
 
 
@@ -264,4 +305,18 @@ void async_pg::process(int n_connections) {
 
 	close(efd);
 	delete[] events;
+}
+
+void async_pg::cond_notify() {
+	char byte;
+	write(_notifiy_fd, &byte, 1);
+}
+
+void async_pg::cond_reset() {
+	int bytes_available;
+	if(ioctl(_wait_fd, FIONREAD, &bytes_available) == 0 && bytes_available > 0) {
+		char* dummy = new char[bytes_available];
+		read(_wait_fd, dummy, bytes_available);
+		delete[] dummy;
+	}
 }
