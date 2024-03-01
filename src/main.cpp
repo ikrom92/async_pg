@@ -182,13 +182,18 @@ int main() {
 
 				// std::this_thread::sleep_for(std::chrono::milliseconds(50));
 			}
-
-			std::cout << "stop" << std::endl;
 		});
 	}
 
 	std::unique_lock<std::mutex> l(lock);
 	cv.wait(l);
+
+	std::cout << "stopping..."<< std::endl;
+	for(int j = 0; j < 100; ++j) {
+		if (threads[j].joinable()) {
+			threads[j].join();
+		}
+	}
 
 	std::cout << "total = " << total << std::endl;
 	pg.stop();
