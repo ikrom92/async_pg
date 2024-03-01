@@ -168,9 +168,10 @@ void async_pg::process(int n_connections) {
 		
 	epoll_event* events = new epoll_event[n_connections];
 	std::unordered_map<int, std::shared_ptr<pg_connection>> scheduled_connections;
+	std::list<pg_query> queries;
+	std::unordered_map<int, pg_query> scheduled_queries;
 
-
-	while (true) {
+	while (_running) {
 
 		// schedule events
 		for (auto conn: connections) {
@@ -216,7 +217,6 @@ void async_pg::process(int n_connections) {
 			}
 
 			if (conn->async_state() == pg_connection::async_state_t::executing_query) {
-				printf("[%02d] async_state_t::executing_query\n", conn->id());
 				
 				if (conn->poll_read()) {
 					event.events |= EPOLLIN;
@@ -229,10 +229,32 @@ void async_pg::process(int n_connections) {
 			}
 
 			if (conn->async_state() == pg_connection::async_state_t::idle) {
-				// printf("[%02d] async_state_t::idle\n", conn->id());
-				// if (!conn->start_send_query("SELECT * FROM w_device")) {
-				// 	printf("[%02d] start_send_query -> %s\n", conn->id(), conn->last_error().c_str());
-				// }
+
+				if (queries.size()) {
+					if (queries.front().name().empty()) {
+						if (conn->start_send_query(queries.front().sql(), queries.front().params())) {
+							scheduled_queries[conn->id()] = std::move(queries.front());
+							queries.pop_front();
+						}
+						else {
+							printf("[%02d] start_send_query -> %s\n", conn->id(), conn->last_error().c_str());
+						}
+					}
+					else if (conn->has_prepared_statement(queries.front().name())) {
+						if (conn->start_send_prepared_query(queries.front().name(), queries.front().params())) {
+							scheduled_queries[conn->id()] = std::move(queries.front());
+							queries.pop_front();
+						}
+						else {
+							printf("[%02d] start_send_prepared_query -> %s\n", conn->id(), conn->last_error().c_str());
+						}
+					}
+					else {
+						if (!conn->start_send_prepared_statement(queries.front().name(), queries.front().sql())) {
+							printf("[%02d] start_send_prepared_statement -> %s\n", conn->id(), conn->last_error().c_str());
+						}
+					}
+				}
 
 				if (conn->poll_read()) {
 					event.events |= EPOLLIN;
@@ -253,7 +275,8 @@ void async_pg::process(int n_connections) {
 			
 		}
 
-		int n_events = epoll_wait(efd, events, n_connections, 100);
+		// wait & handle results
+		int n_events = epoll_wait(efd, events, n_connections, 400);
 		if (n_events == -1) {
 			int error = errno;
 			// @todo handle error
@@ -264,8 +287,8 @@ void async_pg::process(int n_connections) {
 			epoll_event event = events[i];
 			if (scheduled_connections.count(event.data.fd)) {
 				auto conn = scheduled_connections.at(event.data.fd);
-				printf("conn %d, events %02X\n", conn->id(), event.events);
 				if (conn->async_state() == pg_connection::async_state_t::executing_query) {
+
 					if (event.events & EPOLLIN) {
 						conn->read();
 					}
@@ -275,15 +298,14 @@ void async_pg::process(int n_connections) {
 
 					std::list<pg_result> results;
 					if (conn->get_results(results)) {
-						for (auto& r : results) {
-							printf("[%02d] got result\n", conn->id());
-							// printf("---------------\n%s\n\n", r.dump().c_str());
+						if (scheduled_queries.count(conn->id())) {
+							scheduled_queries.at(conn->id()).set_result(std::move(results));
+							scheduled_queries.erase(conn->id());
 						}
 					}
 				}
 				
 				if (event.events & EPOLLERR) {
-					// @todo handle error
 					printf("\tEPOLLERR\n");
 				}
 
@@ -293,15 +315,28 @@ void async_pg::process(int n_connections) {
 				scheduled_connections.erase(event.data.fd);
 			}
 			else if (event.data.fd == _wait_fd) {
-				printf("wake up\n");
 				cond_reset();
 			}
 
 		}
+
+		// get new requests
+		std::lock_guard<std::mutex> lock(_mtx);
+		if (_queries.size() > 0) {
+			for (pg_query& q : _queries) {
+				queries.push_back(std::move(q));
+			}
+			_queries.clear();
+		}
 	}
 
+	for(auto& pair: scheduled_queries) {
+		pair.second.set_error("stopping service");
+	}
 
-
+	for(auto& query: queries) {
+		query.set_error("stopping service");
+	}
 
 	close(efd);
 	delete[] events;

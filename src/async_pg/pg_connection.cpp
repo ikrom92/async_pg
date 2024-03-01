@@ -88,6 +88,7 @@ PostgresPollingStatusType pg_connection::connectPoll() {
 	else if (s == PostgresPollingStatusType::PGRES_POLLING_FAILED) {
 		if (_async_state == async_state_t::idle || _async_state == async_state_t::executing_query) {
 			_async_state = async_state_t::connection_abort;
+			_last_error = PQerrorMessage(_conn);
 		}
 	}
 	return s;
@@ -108,6 +109,7 @@ PostgresPollingStatusType pg_connection::resetPoll() {
 	else if (s == PostgresPollingStatusType::PGRES_POLLING_FAILED) {
 		if (_async_state == async_state_t::idle || _async_state == async_state_t::executing_query) {
 			_async_state = async_state_t::connection_abort;
+			_last_error = PQerrorMessage(_conn);
 		}
 	}
 	return s;

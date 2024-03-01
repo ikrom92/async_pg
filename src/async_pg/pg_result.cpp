@@ -93,6 +93,11 @@ int pg_result::rows_affected() {
 
 std::string pg_result::dump() {
 
+	ExecStatusType status = PQresultStatus(_res);
+	if (status != PGRES_COMMAND_OK && status != PGRES_TUPLES_OK) {
+		return PQresultErrorMessage(_res);
+	}
+	
 	std::stringstream ss;
 	int n_rows = rows_count();
 	int n_cols = cols_count();
