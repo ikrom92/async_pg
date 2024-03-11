@@ -230,7 +230,7 @@ bool pg_connection::start_send_prepared_statement(const std::string& name, const
 	if (PQflush(_conn) == 1) {
 		_need_flush = true;
 	}
-
+	_prepared_statements.insert(name);
 	_async_state = async_state_t::executing_query;
 	return true;
 }

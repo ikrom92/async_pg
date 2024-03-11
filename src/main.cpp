@@ -139,48 +139,41 @@ int main() {
 
 				// std::string command = "select id, device_type_id, company_id, alias, serial_number from w_device";
 
-				std::string command;
+				std::string command, name;
 
 				if (i % 3 == 0) {
+					name = "get_device";
 					command = "select * from w_device";
 				}
 				else if (i % 3 == 1) {
+					name = "get_device_cmds";
 					command = "select * from w_device_cmds";
 				}
 				else {
-					command = "select * from w_faces";
+					name = "get_faces";
+					command = "select id, person_id from w_faces";
 				}
 
 				i++;
-				if (i % 3 == 0) {
-					command = "select * from w_device";
-				}
-				else if (i % 3 == 1) {
-					command = "select * from w_device_cmds";
-				}
-				else {
-					command = "select * from w_faces";
-				}
 
 				// std::getline(std::cin, command);
 
 				// if (command == "quit") {
 				// 	break;
 				// }
-				i++;
 
 				total++;
 
-				auto f = pg.execute(command);
+				auto f = pg.execute_prepared(name, command);
 				f.wait();
-				// auto results = f.get();
-				// for (auto& r : results) {
-				// 	std::cout << j << ": " << i << " --------------------------" << std::endl;
-				// 	std::cout << r.dump() << std::endl;
-				// 	std::cout << "--------------------------" << std::endl;
-				// }
+				auto results = f.get();
+				for (auto& r : results) {
+					std::cout << j << ": " << i << " --------------------------" << std::endl;
+					std::cout << r.dump() << std::endl;
+					std::cout << "--------------------------" << std::endl;
+				}
 
-				// std::this_thread::sleep_for(std::chrono::milliseconds(50));
+				std::this_thread::sleep_for(std::chrono::milliseconds(50));
 			}
 		});
 	}

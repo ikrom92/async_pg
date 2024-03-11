@@ -87,8 +87,8 @@ void async_pg::stop() {
 	std::unique_lock<std::mutex> lock(_mtx);
 	if (_running) {
 		_running = false;
-		cond_notify();
 		lock.unlock();
+		cond_notify();
 		if (_thr.joinable()) {
 			_thr.join();
 		}
@@ -171,7 +171,14 @@ void async_pg::process(int n_connections) {
 	std::list<pg_query> queries;
 	std::unordered_map<int, pg_query> scheduled_queries;
 
-	while (_running) {
+	while (true) {
+
+		{
+			std::lock_guard<std::mutex> lock(_mtx);
+			if (!_running) {
+				break;
+			}
+		}
 
 		// schedule events
 		for (auto conn: connections) {
