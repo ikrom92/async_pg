@@ -33,7 +33,13 @@ pg_result& pg_result::operator=(pg_result&& o) {
 	return *this;
 }
 
-void pg_result::check() {}
+void pg_result::check() {
+	auto status = PQresultStatus(_res);
+	if (status != PGRES_COMMAND_OK && status != PGRES_TUPLES_OK) {
+		std::string error = PQresultErrorMessage(_res);
+		throw std::runtime_error(error);
+	}
+}
 
 int pg_result::rows_count() {
 	if (_res) {

@@ -9,6 +9,10 @@
 #include <string.h>
 #include "pg_connection.hpp"
 
+#define log_error(...) printf(__VA_ARGS__); printf("\n")
+#define log_info(...) printf(__VA_ARGS__); printf("\n")
+
+
 // Rules:
 // 1. Don't call PQconsumeInput on PGRES_POLLING_READING.
 //		If you call PQconsumeInput on PGRES_POLLING_READING, 
@@ -149,11 +153,15 @@ void async_pg::process(int n_connections) {
 			connections.push_back(conn);
 		}
 		else {
-			std::string error = conn->last_error();
-			//@todo: log error
+			log_error("\t[%02d] start_connect -> %s", conn->id(), conn->last_error().c_str());
 		}
 	}
 	
+	if (connections.empty()) {
+		log_error("\tasync_pg service failed. no success connections");
+		return;
+	}
+
 	int efd = epoll_create1(0);
 
 	{
@@ -161,7 +169,7 @@ void async_pg::process(int n_connections) {
 		e.events = EPOLLIN;
 		e.data.fd = _wait_fd;
 		if (epoll_ctl(efd, EPOLL_CTL_ADD, _wait_fd, &e) == -1) {
-			printf("failed to add _wait_fd to epoll\n");
+			log_error("failed to add _wait_fd to epoll");
 			return;
 		}
 	}
@@ -187,7 +195,7 @@ void async_pg::process(int n_connections) {
 
 			// conn->connectPoll() might change async_state of connection
 			if (conn->async_state() == pg_connection::async_state_t::connecting) {
-				printf("[%02d] async_state_t::connecting\n", conn->id());
+				log_info("[%02d] async_state_t::connecting", conn->id());
 				PostgresPollingStatusType s = conn->connectPoll();
 				if (s == PostgresPollingStatusType::PGRES_POLLING_READING) {
 					event.events |= EPOLLIN;
@@ -199,7 +207,7 @@ void async_pg::process(int n_connections) {
 
 			// conn->resetPoll() might change async_state of connection
 			if (conn->async_state() == pg_connection::async_state_t::resetting) {
-				printf("[%02d] async_state_t::resetting\n", conn->id());
+				log_info("[%02d] async_state_t::resetting", conn->id());
 				PostgresPollingStatusType s = conn->resetPoll();
 				if (s == PostgresPollingStatusType::PGRES_POLLING_READING) {
 					event.events |= EPOLLIN;
@@ -210,16 +218,16 @@ void async_pg::process(int n_connections) {
 			}
 
 			if (conn->async_state() == pg_connection::async_state_t::connection_failed) {
-				printf("[%02d] async_state_t::connection_failed: %s\n", conn->id(), conn->last_error().c_str());
+				log_info("[%02d] async_state_t::connection_failed: %s", conn->id(), conn->last_error().c_str());
 				if (!conn->start_connect(_connection_params)) {
-					printf("\t[%02d] start_connect -> %s\n", conn->id(), conn->last_error().c_str());
+					log_error("\t[%02d] start_connect -> %s", conn->id(), conn->last_error().c_str());
 				}
 			}
 
 			if (conn->async_state() == pg_connection::async_state_t::connection_abort) {
-				printf("[%02d] async_state_t::connection_abort: %s\n", conn->id(), conn->last_error().c_str());
+				log_info("[%02d] async_state_t::connection_abort: %s", conn->id(), conn->last_error().c_str());
 				if (!conn->start_reset()) {
-					printf("\t[%02d] start_reset -> %s\n", conn->id(), conn->last_error().c_str());
+					log_error("\t[%02d] start_reset -> %s", conn->id(), conn->last_error().c_str());
 				}
 			}
 
@@ -244,7 +252,7 @@ void async_pg::process(int n_connections) {
 							queries.pop_front();
 						}
 						else {
-							printf("[%02d] start_send_query -> %s\n", conn->id(), conn->last_error().c_str());
+							log_error("[%02d] start_send_query -> %s", conn->id(), conn->last_error().c_str());
 						}
 					}
 					else if (conn->has_prepared_statement(queries.front().name())) {
@@ -253,12 +261,12 @@ void async_pg::process(int n_connections) {
 							queries.pop_front();
 						}
 						else {
-							printf("[%02d] start_send_prepared_query -> %s\n", conn->id(), conn->last_error().c_str());
+							log_error("[%02d] start_send_prepared_query -> %s", conn->id(), conn->last_error().c_str());
 						}
 					}
 					else {
 						if (!conn->start_send_prepared_statement(queries.front().name(), queries.front().sql())) {
-							printf("[%02d] start_send_prepared_statement -> %s\n", conn->id(), conn->last_error().c_str());
+							log_error("[%02d] start_send_prepared_statement -> %s", conn->id(), conn->last_error().c_str());
 						}
 					}
 				}
@@ -282,14 +290,13 @@ void async_pg::process(int n_connections) {
 			
 		}
 
-		// wait & handle results
+		// wait for events
 		int n_events = epoll_wait(efd, events, n_connections, 400);
 		if (n_events == -1) {
-			int error = errno;
-			// @todo handle error
-			printf("[error] epoll_wait -> %d\n", error);
+			log_error("epoll_wait -> %d", errno);
 		}
 
+		// read events
 		for (int i = 0; i < n_events; ++i) {
 			epoll_event event = events[i];
 			if (scheduled_connections.count(event.data.fd)) {
@@ -313,12 +320,10 @@ void async_pg::process(int n_connections) {
 				}
 				
 				if (event.events & EPOLLERR) {
-					printf("\tEPOLLERR\n");
+					log_error("\t[%02d] EPOLLERR", conn->id());
 				}
 
-				if (epoll_ctl(efd, EPOLL_CTL_DEL, event.data.fd, nullptr) == -1) {
-					printf("epoll_ctl(del) -> %d\n", errno);
-				}
+				epoll_ctl(efd, EPOLL_CTL_DEL, event.data.fd, nullptr);
 				scheduled_connections.erase(event.data.fd);
 			}
 			else if (event.data.fd == _wait_fd) {
