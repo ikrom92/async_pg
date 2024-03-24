@@ -130,63 +130,81 @@ int main() {
 	async_pg pg("10.0.2.2", "5432", "workly", "postgres", "123", "disable");
 	pg.start(10);
 
-	std::thread threads[100];
-	
-	for(int j = 0; j < 100; ++j) {
-		threads[j] = std::thread([&pg, j]{
-			int i = 0; 
-			while (running) {
 
-				// std::string command = "select id, device_type_id, company_id, alias, serial_number from w_device";
+	std::list<pg_param> params;
+	params.push_back(pg_param::text("K26311722"));
 
-				std::string command, name;
+	auto results = pg.execute_prepared(
+		"get_device_info",
+		"SELECT time_zone_adj, company_id FROM w_device WHERE serial_number=$1::varchar(250))",
+		std::move(params)
+	).get();
 
-				if (i % 3 == 0) {
-					name = "get_device";
-					command = "select * from w_device";
-				}
-				else if (i % 3 == 1) {
-					name = "get_device_cmds";
-					command = "select * from w_device_cmds";
-				}
-				else {
-					name = "get_faces";
-					command = "select id, person_id from w_faces";
-				}
-
-				i++;
-
-				// std::getline(std::cin, command);
-
-				// if (command == "quit") {
-				// 	break;
-				// }
-
-				total++;
-
-				auto f = pg.execute_prepared(name, command);
-				f.wait();
-				auto results = f.get();
-				for (auto& r : results) {
-					std::cout << j << ": " << i << " --------------------------" << std::endl;
-					std::cout << r.dump() << std::endl;
-					std::cout << "--------------------------" << std::endl;
-				}
-
-				std::this_thread::sleep_for(std::chrono::milliseconds(50));
-			}
-		});
+	for (auto& r : results) {
+		r.check();
+		std::cout << " --------------------------" << std::endl;
+		std::cout << r.dump() << std::endl;
+		std::cout << "--------------------------" << std::endl;
 	}
+
+
+	// std::thread threads[100];
+	
+	// for(int j = 0; j < 100; ++j) {
+	// 	threads[j] = std::thread([&pg, j]{
+	// 		int i = 0; 
+	// 		while (running) {
+
+	// 			// std::string command = "select id, device_type_id, company_id, alias, serial_number from w_device";
+
+	// 			std::string command, name;
+
+	// 			if (i % 3 == 0) {
+	// 				name = "get_device";
+	// 				command = "select * from w_device";
+	// 			}
+	// 			else if (i % 3 == 1) {
+	// 				name = "get_device_cmds";
+	// 				command = "select * from w_device_cmds";
+	// 			}
+	// 			else {
+	// 				name = "get_faces";
+	// 				command = "select id, person_id from w_faces";
+	// 			}
+
+	// 			i++;
+
+	// 			// std::getline(std::cin, command);
+
+	// 			// if (command == "quit") {
+	// 			// 	break;
+	// 			// }
+
+	// 			total++;
+
+	// 			auto f = pg.execute_prepared(name, command);
+	// 			f.wait();
+	// 			auto results = f.get();
+	// 			for (auto& r : results) {
+	// 				std::cout << j << ": " << i << " --------------------------" << std::endl;
+	// 				std::cout << r.dump() << std::endl;
+	// 				std::cout << "--------------------------" << std::endl;
+	// 			}
+
+	// 			std::this_thread::sleep_for(std::chrono::milliseconds(50));
+	// 		}
+	// 	});
+	// }
 
 	std::unique_lock<std::mutex> l(lock);
 	cv.wait(l);
 
 	std::cout << "stopping..."<< std::endl;
-	for(int j = 0; j < 100; ++j) {
-		if (threads[j].joinable()) {
-			threads[j].join();
-		}
-	}
+	// for(int j = 0; j < 100; ++j) {
+	// 	if (threads[j].joinable()) {
+	// 		threads[j].join();
+	// 	}
+	// }
 
 	std::cout << "total = " << total << std::endl;
 	pg.stop();

@@ -316,6 +316,16 @@ void async_pg::process(int n_connections) {
 							scheduled_queries.at(conn->id()).set_result(std::move(results));
 							scheduled_queries.erase(conn->id());
 						}
+						else {
+							for (auto& r : results) {
+								try {
+									r.check();
+								}
+								catch (const std::exception& e) {
+									log_error("%s", e.what());
+								}
+							}
+						}
 					}
 				}
 				
